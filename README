@@ -1,0 +1,38 @@
+How to build jdk2ikvm
+=====================
+
+1) Compile all Scala source files from 
+
+    git@github.com:magarciaEPFL/jdk2ikvm.git
+
+2) say the resulting classfiles are found in folder myplugins\jdk2ikvm\classes
+
+3) prepare jdk2ikvm.jar
+
+    del jdk2ikvm.jar
+    jar -cf jdk2ikvm.jar -C myplugins\jdk2ikvm\classes scala -C myplugins\jdk2ikvm\resources\ . 
+
+4) where myplugins\jdk2ikvm\resources contains the plugin manifest scalac-plugin.xml
+
+    <plugin>
+        <name>jdk2ikvm</name>
+        <classname>scala.tools.jdk2ikvm.JDK2IKVMPlugin</classname>
+    </plugin> 
+
+
+How to run jdk2ikvm
+===================
+
+jdk2ikvm is a compiler plugin for the Scala compiler. Details on compiler plugins at
+    http://www.scala-lang.org/node/140
+
+
+As with most compiler plugins, jdk2ikvm requires a few command-line options when run: 
+
+    -Ystop:superaccessors /*- given that the plugin runs right after typer */
+    -sourcepath bla\bla\src 
+    -P:jdk2ikvm:output-directory:bla\bla\out
+    -d bla\bla\out /*- yes, again the same output folder as given above */
+    -Xplugin where\to\find\jdk2ikvm.jar 
+    -Yrangepos 
+
