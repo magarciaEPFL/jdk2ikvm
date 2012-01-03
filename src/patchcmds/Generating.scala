@@ -25,6 +25,58 @@ trait Generating extends Patching { this : Plugin =>
 
   private[Generating] class CallsiteUtils(patchtree: PatchTree) {
 
+    /*
+     * the unique method in clazz with name and paramTypes, NoSymbol otherwise.
+     */
+    def lookupMethod(clazz: Symbol, name: Name, paramTypes: List[Type]): Symbol = {
+      val memberSym = clazz.tpe.member(name)
+      memberSym.tpe match {
+        case OverloadedType(_, alternatives) =>
+
+          val candidates =
+            for(s <- alternatives;
+                if paramTypes.length == s.tpe.paramTypes.length;
+                if (paramTypes zip s.tpe.paramTypes) forall { p => p._1 == p._2 }
+            ) yield s;
+
+          candidates match {
+            case memberSym :: Nil => memberSym
+            case _ => NoSymbol
+          }
+
+        case MethodType(_, _) => memberSym
+
+        case _ => NoSymbol
+      }
+    }
+
+    def patchCallsite(app: Apply, txtFrom: String, txtTo: String, elimParens: Boolean) {
+      val Apply(fun, args) = app
+      if(!fun.pos.isRange /* thus non-synthetic callsite */ ) {
+        // TODO if not synthetic, warning(app.pos, "couldn't rewrite "+txtFrom+"() call " + asString(app))
+        return
+      }
+      val funPos = fun.pos.asInstanceOf[RangePosition]
+      val Select(quali, originalName) = fun
+      val replStart =
+        if(quali.pos.isRange) {
+          val qualiPos = quali.pos.asInstanceOf[RangePosition]
+          qualiPos.end
+        } else {
+          funPos.start
+        }
+      val toRepl = patchtree.asString(replStart, funPos.end - 1)
+      val newText = toRepl.replaceAll(txtFrom, txtTo) // toRepl can be `.clone' or `clone', for example
+      val tmpTo = if(elimParens && (patchtree.asString(funPos.end, funPos.end + 1) == "()"))
+                    funPos.end + 1         /* e.g., originally this.clone() */
+                  else funPos.end - 1      /* e.g., originally this.clone   */
+      /* TODO save for parens elim, we still call toString
+       * (for example, scala.collection.mutable.StringBuilder.toString)
+       * Given that the DefDef for such `toString' methods is co-overriden with ToString,
+       * shouldn't we just */
+      patchtree.replace(replStart, tmpTo, newText)
+    }
+
     private val Throwable_getStackTrace = definitions.getMember(ThrowableClass, "getStackTrace")
 
     def swallowing(tree: Tree, msg: String)(op: => Unit) {
@@ -350,39 +402,61 @@ trait Generating extends Patching { this : Plugin =>
     private val JavaPackage       = getModule("java")
     private val JavaPackageClass  = JavaPackage.tpe.typeSymbol
 
+    private val jlString_startsWith_OneArg = lookupMethod(StringClass, "startsWith", List(StringClass.tpe))
+    private val jlString_endsWith_OneArg   = lookupMethod(StringClass, "endsWith"  , List(StringClass.tpe))
+    private val jlString_substring_OneArg  = lookupMethod(StringClass, "substring" , List(IntClass.tpe))
+    private val jlString_toLowercase_NoArg = lookupMethod(StringClass, "toLowerCase" , Nil)
+    private val jlString_toUppercase_NoArg = lookupMethod(StringClass, "toUpperCase" , Nil)
+
+    private val jlString_indexOf_Char      = lookupMethod(StringClass, "indexOf" , List(IntClass.tpe)) /* yes, IntClass and not CharClass */
+    private val jlString_indexOf_String    = lookupMethod(StringClass, "indexOf" , List(StringClass.tpe))
+    private val jlString_indexOf_CharInt   = lookupMethod(StringClass, "indexOf" , List(IntClass.tpe, IntClass.tpe))
+    private val jlString_indexOf_StringInt = lookupMethod(StringClass, "indexOf" , List(StringClass.tpe, IntClass.tpe))
+
+    private val jlString_lastIndexOf_Char      = lookupMethod(StringClass, "lastIndexOf" , List(IntClass.tpe)) /* yes, IntClass and not CharClass */
+    private val jlString_lastIndexOf_String    = lookupMethod(StringClass, "lastIndexOf" , List(StringClass.tpe))
+    private val jlString_lastIndexOf_CharInt   = lookupMethod(StringClass, "lastIndexOf" , List(IntClass.tpe, IntClass.tpe))
+    private val jlString_lastIndexOf_StringInt = lookupMethod(StringClass, "lastIndexOf" , List(StringClass.tpe, IntClass.tpe))
+
+    private val oneToOneEquivsString: Map[Symbol, (String, Boolean)] = Map(
+
+      /* Category 1: these are real 1-to-1 counterparts, both in the normal and exceptional paths. */
+
+      getMember(StringClass, nme.length)    -> ("Length",      true) ,
+      getMember(StringClass, nme.toString_) -> ("ToString",    false),
+      getMember(StringClass, "toCharArray") -> ("ToCharArray", false),
+      getMember(StringClass, "trim")        -> ("Trim",        false),
+      // getMember(StringClass, "equals")      -> ("Equals",      false),
+
+      /* Category 2: not exactly 1-to-1 counterparts (e.g. local issues around ToLower)
+                     but in fact so similar to each other that we just replace. */
+
+      jlString_startsWith_OneArg -> ("StartsWith", false),
+      jlString_endsWith_OneArg   -> ("EndsWith",   false),
+      jlString_substring_OneArg  -> ("Substring",  false),
+      jlString_toLowercase_NoArg -> ("ToLower",    false),
+      jlString_toUppercase_NoArg -> ("ToUpper",    false),
+      jlString_indexOf_Char      -> ("IndexOf",    false),
+      jlString_indexOf_String    -> ("IndexOf",    false),
+      jlString_indexOf_CharInt   -> ("IndexOf",    false),
+      jlString_indexOf_StringInt -> ("IndexOf",    false),
+      jlString_lastIndexOf_Char      -> ("LastIndexOf", false),
+      jlString_lastIndexOf_String    -> ("LastIndexOf", false),
+      jlString_lastIndexOf_CharInt   -> ("LastIndexOf", false),
+      jlString_lastIndexOf_StringInt -> ("LastIndexOf", false),
+
+      /* Category 3: The exceptional path differs (e.g., charAt may throw IKVM's java.lang.IndexOutOfBoundsException
+                     while Chars(idx) may throw System.IndexOutOfRangeException) */
+
+      getMember(StringClass, "charAt") -> ("Chars",        false)
+    ) filter ( e => e._1 != NoSymbol )
+
     def collectPatches(tree: Tree) {
       instanceAndNewHelpers(tree)
       coOverrides(tree)
       callsitesToObjMethodsInAny(tree)
       addMissingJLObjOverrides(tree)
       // TODO rewrite super.hashCode
-    }
-
-    private def patchCallsite(app: Apply, txtFrom: String, txtTo: String, elimParens: Boolean) {
-      val Apply(fun, args) = app 
-      if(!fun.pos.isRange /* thus non-synthetic callsite */ ) {
-        // TODO if not synthetic, warning(app.pos, "couldn't rewrite "+txtFrom+"() call " + asString(app))
-        return
-      }
-      val funPos = fun.pos.asInstanceOf[RangePosition]
-      val Select(quali, originalName) = fun
-      val replStart =
-        if(quali.pos.isRange) {
-          val qualiPos = quali.pos.asInstanceOf[RangePosition]
-          qualiPos.end
-        } else {
-          funPos.start
-        }
-      val toRepl = patchtree.asString(replStart, funPos.end - 1)
-      val newText = toRepl.replaceAll(txtFrom, txtTo) // toRepl can be `.clone' or `clone', for example
-      val tmpTo = if(elimParens && (patchtree.asString(funPos.end, funPos.end + 1) == "()"))
-                    funPos.end + 1         /* e.g., originally this.clone() */
-                  else funPos.end - 1      /* e.g., originally this.clone   */
-      /* TODO save for parens elim, we still call toString
-       * (for example, scala.collection.mutable.StringBuilder.toString)
-       * Given that the DefDef for such `toString' methods is co-overriden with ToString,
-       * shouldn't we just */
-      patchtree.replace(replStart, tmpTo, newText)
     }
 
     private def hasTypeJavaLangCharSequence(tree: Tree): Boolean = {
@@ -445,6 +519,11 @@ trait Generating extends Patching { this : Plugin =>
 
     private def instanceAndNewHelpers(tree: Tree) {
       tree match {
+
+        case app @ Apply(fun, args) if (oneToOneEquivsString contains app.symbol) =>
+          val fromMethodName = app.symbol.decodedName
+          val (toMethodName, elimParens) = oneToOneEquivsString(app.symbol)
+          patchCallsite(app, fromMethodName, toMethodName, elimParens) // `elimParens` true for CLR properties, false for methods
 
         case app @ Apply(fun, args) if (jlStringDetour contains app.symbol) => instancehelper("_root_.java.lang.String", app)
 
@@ -696,8 +775,21 @@ trait Generating extends Patching { this : Plugin =>
     val sError     = ScalaPackageClass.info.decls.lookupEntry("Error".toTypeName).sym
     val sException = ScalaPackageClass.info.decls.lookupEntry("Exception".toTypeName).sym
     
+    private val oneToOneEquivsThrowable: Map[Symbol, (String, Boolean)] = Map(
+
+      /* This rewriting may result in different exception messages. */
+
+      getMember(ThrowableClass, "getMessage") -> ("Message", true)
+    ) filter ( e => e._1 != NoSymbol )
+
     def collectPatches(tree: Tree) {
       tree match {
+
+        case app @ Apply(fun, args) if (oneToOneEquivsThrowable contains app.symbol) =>
+          val fromMethodName = app.symbol.decodedName
+          val (toMethodName, elimParens) = oneToOneEquivsThrowable(app.symbol)
+          patchCallsite(app, fromMethodName, toMethodName, elimParens) // `elimParens` true for CLR properties, false for methods
+
         case app @ Apply(fun, args) if (jlThrowableDetour contains app.symbol) => instancehelper("java.lang.Throwable", app)
 
         /* For example, scala.util.control.ControlThrowable is defined as: 
@@ -759,6 +851,7 @@ trait Generating extends Patching { this : Plugin =>
             patchtree.replace(treePos.start, treePos.end - 1, fqn + "." + name)
           } else {
             warning(tree.pos, "couldn't fqn static access " + asString(tree))
+
             /* TODO this happens for a static access as default argument
                  def touch(modTime: Long = System.currentTimeMillis) = ...
                One way to deal with it is upstream, at the handler for a formal param (ValDef).
