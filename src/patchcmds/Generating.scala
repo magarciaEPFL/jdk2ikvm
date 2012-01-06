@@ -16,6 +16,8 @@ trait Generating extends Patching { this : Plugin =>
   import global._
   import definitions._
 
+  private implicit def stringToTermName(s: String): TermName = newTermName(s)
+
   private val msgPrefix = "["+JDK2IKVMPlugin.PluginName +"] "
   def pluginError(pos: Position, msg: String)   = reporter.error(pos, msgPrefix + msg)
   def warning(pos: Position, msg: String) = reporter.warning(pos, msgPrefix + msg) 
@@ -428,7 +430,7 @@ trait Generating extends Patching { this : Plugin =>
       getMember(StringClass, "trim")        -> ("Trim",        false),
       // getMember(StringClass, "equals")      -> ("Equals",      false),
 
-      /* Category 2: not exactly 1-to-1 counterparts (e.g. local issues around ToLower)
+      /* Category 2: not exactly 1-to-1 counterparts (e.g. locale issues around ToLower)
                      but in fact so similar to each other that we just replace. */
 
       jlString_startsWith_OneArg -> ("StartsWith", false),
@@ -1557,7 +1559,7 @@ trait Generating extends Patching { this : Plugin =>
       missingArgForRepeated    collectPatches  tree
       oneOrMoreArgForRepeated  collectPatches  tree
 
-      annIgnorer               collectPatches  tree
+      // annIgnorer               collectPatches  tree
       upcasters foreach { uc => uc collectPatches  tree }
       typeArgEraser            collectPatches  tree
       downCaster               collectPatches  tree
