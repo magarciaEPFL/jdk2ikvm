@@ -591,7 +591,7 @@ trait Generating extends Patching { this : Plugin =>
       tree match {
         case cd: ClassDef =>
           val cestors       = cd.symbol.ancestors
-          val nonObjCestors = cestors diff List(AnyClass, AnyRefClass, ObjectClass, ScalaObjectClass)
+          val nonObjCestors = cestors diff List(AnyClass, AnyRefClass, ObjectClass)
           val missingJLObjOverrides = for(a <- nonObjCestors; msym <- a.tpe.deferredMembers
                                           if jlObjectMembers contains msym.overriddenSymbol(ObjectClass)
                                           if msym.owner.ownerChain contains JavaPackageClass)
@@ -967,6 +967,7 @@ trait Generating extends Patching { this : Plugin =>
       tree match {
         case dd: DefDef =>
           for(anninfo <- dd.symbol.annotations;
+              val wakeUpTheLazy = anninfo.atp;
               if (ignorables exists (anninfo matches _)) // was (ignorables contains anninfo.atp.typeSymbol)
           ) {
             val annPos = anninfo.pos.asInstanceOf[RangePosition]
