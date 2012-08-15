@@ -26,13 +26,16 @@ How to run jdk2ikvm
 jdk2ikvm is a compiler plugin for the Scala compiler. Details on compiler plugins at
     http://www.scala-lang.org/node/140
 
+It runs with the following version of the Scala compiler
+  https://github.com/scala/scala/tree/c58b6a8716d70d32264d436b8224d0b33ad0d5a7
 
 As with most compiler plugins, jdk2ikvm requires a few command-line options when run: 
 
-    -Ystop:superaccessors /*- given that the plugin runs right after typer */
+    -Ystop-after:superaccessors /*- given that the plugin runs right after typer */
     -sourcepath bla\bla\src 
     -P:jdk2ikvm:output-directory:bla\bla\out
     -d bla\bla\out /*- yes, again the same output folder as given above */
     -Xplugin where\to\find\jdk2ikvm.jar 
     -Yrangepos 
+    list of .scala source files to convert
 
